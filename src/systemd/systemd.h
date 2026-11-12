@@ -11,6 +11,8 @@ struct Service_List{
     int count;
 };
 
-struct Service_List list_service(void);
+/* On success, the caller must release the list with free_service_list(). */
+int list_service(struct Service_List *result);
+void free_service_list(struct Service_List *list);
 
 int get_conf_services_data(char *file_path);

@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
-#include "../third_party/cjson/cJSON.h"
+#include <stdint.h>
+#include "utils.h"
 
 cJSON* parse_json(char file_path[256]) {
     FILE *file = fopen(file_path, "rb");
@@ -12,23 +13,40 @@ cJSON* parse_json(char file_path[256]) {
         return NULL;
     }
 
-    fseek(file, 0, SEEK_END);
+    if (fseek(file, 0, SEEK_END) != 0) {
+        perror("Failed to seek config");
+        fclose(file);
+        return NULL;
+    }
     long length = ftell(file);
-
-    printf("Length of file: %ld\n", length);
-
-    char *buffer_config = malloc(length + 1);
-    if (buffer_config == NULL) {
-        perror("Memory allocation failed for some reason\n");
+    if (length < 0 || (uintmax_t)length >= SIZE_MAX) {
+        fprintf(stderr, "Invalid config file size\n");
+        fclose(file);
         return NULL;
     }
 
-    
-    
-    rewind(file);
+    printf("Length of file: %ld\n", length);
 
-    
-    size_t read_size = fread(buffer_config, 1, length, file);
+    char *buffer_config = malloc((size_t)length + 1);
+    if (buffer_config == NULL) {
+        perror("Memory allocation failed for some reason\n");
+        fclose(file);
+        return NULL;
+    }
+
+    if (fseek(file, 0, SEEK_SET) != 0) {
+        perror("Failed to rewind config");
+        free(buffer_config);
+        fclose(file);
+        return NULL;
+    }
+    size_t read_size = fread(buffer_config, 1, (size_t)length, file);
+    if (read_size != (size_t)length) {
+        fprintf(stderr, "Failed to read complete config: %s\n", file_path);
+        free(buffer_config);
+        fclose(file);
+        return NULL;
+    }
     buffer_config[read_size] = '\0';
 
     printf("Contents of config:\n---\n%s\n---\n", buffer_config);
@@ -76,8 +94,16 @@ char ** parse_services(cJSON* json) {
 
     if (!cJSON_IsArray(json)) return NULL;
     int item_count = cJSON_GetArraySize(json);
+    if (item_count < 0) {
+        fprintf(stderr, "Service list is too large\n");
+        return NULL;
+    }
 
-    char ** services = calloc((size_t)item_count, sizeof *services);
+    char ** services = calloc((size_t)item_count + 1, sizeof *services);
+    if (services == NULL) {
+        fprintf(stderr, "Failed to allocate service list\n");
+        return NULL;
+    }
 
     cJSON *service;
     cJSON_ArrayForEach(service, json) {
@@ -86,6 +112,7 @@ char ** parse_services(cJSON* json) {
         services[service_count] = malloc(length);
 
         if(services[service_count] == 0) {
+            fprintf(stderr, "Failed to allocate service name\n");
             for (size_t i = 0; i < service_count; i++) free(services[i]);
             free(services);
             service_count=0;
@@ -108,9 +135,18 @@ char ** parse_procs_array(cJSON* json_procs, size_t *proc_count) {
     if(!cJSON_IsArray(json_procs)) return NULL;
 
     int item_count = cJSON_GetArraySize(json_procs);
+    if (item_count < 0) {
+        fprintf(stderr, "Process list is too large\n");
+        return NULL;
+    }
+    if (item_count == 0)
+        return NULL;
     char **procs = calloc((size_t)item_count, sizeof *procs);
 
-    if (item_count > 0 && procs == NULL) return NULL;
+    if (procs == NULL) {
+        fprintf(stderr, "Failed to allocate process list\n");
+        return NULL;
+    }
 
     
     cJSON *proc;
@@ -122,6 +158,7 @@ char ** parse_procs_array(cJSON* json_procs, size_t *proc_count) {
         procs[*proc_count] = malloc(length);
 
         if(procs[*proc_count] == 0) {
+            fprintf(stderr, "Failed to allocate process name\n");
             for (size_t i = 0; i < *proc_count; i++) free(procs[i]);
             free(procs);
             *proc_count=0;

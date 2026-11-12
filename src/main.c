@@ -10,12 +10,6 @@
 
 
 int main(int argc, char* argv[]) {
-    // struct Service_List service = list_service();
-    // if (service.count == 0) {
-    //     printf("Error in list_service: check for sudo\n");
-    //     return -1;
-    // }
-    
     int opt;
 
     printf("args: \n");
@@ -68,14 +62,5 @@ int main(int argc, char* argv[]) {
             sleep(watch);
     } while (watch > 0);
 
-    int services = get_conf_services_data(filename);
-    
-
-    // int samba_result = samba();
-
-    // if (samba_result != 0) {
-    //     return samba_result;
-    // }
-    end:
     return 0;
 }

@@ -64,11 +64,24 @@ int samba() {
     printf("Running samba logger\n");
     char fp [256] ="./data/config.json";
     cJSON *json = parse_json(fp);
+    if (json == NULL) {
+        fprintf(stderr, "Could not parse configuration file: %s\n", fp);
+        return 1;
+    }
 
     cJSON *procs = cJSON_GetObjectItemCaseSensitive(json, "procs");
+    if (!cJSON_IsArray(procs)) {
+        fprintf(stderr, "Configuration has no valid procs array\n");
+        cJSON_Delete(json);
+        return 1;
+    }
 
     size_t len = 1000;
     char ** parsed_procs = parse_procs_array(procs, &len);
+    if (parsed_procs == NULL && cJSON_GetArraySize(procs) > 0) {
+        cJSON_Delete(json);
+        return 1;
+    }
 
     size_t procs_len = len;
 
@@ -94,6 +107,10 @@ int samba() {
         printf("Proccess not found\n");
     }
 
+    for (size_t i = 0; i < procs_len; i++) {
+        free(parsed_procs[i]);
+    }
+    free(parsed_procs);
     cJSON_Delete(json);
     
     return 0;
