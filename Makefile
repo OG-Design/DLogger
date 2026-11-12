@@ -15,7 +15,7 @@ samba_c=samba.c
 samba_src=$(sambadir)/$(samba_c)
 
 cjsondir=./third_party/cjson
-cjson_c=cjson.c
+cjson_c=cJSON.c
 cjson_src=$(cjsondir)/$(cjson_c)
 cjson_out=$(outdir)/$(cjson_o)
 
