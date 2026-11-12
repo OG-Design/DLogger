@@ -1,0 +1,14 @@
+{
+    "procs": [
+        "samba",
+        "systemd"
+    ],
+    "services": [
+        "NetworkManager.service",
+        "Samba",
+        "authselect-apply-changes.service",
+        "systemd-homed.service",
+        "systemd-logind.service",
+        "systemd-userdbd.service"
+    ]
+}
