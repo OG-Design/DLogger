@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <signal.h>
 
 #include "samba/samba.h"
 #include "systemd/systemd.h"
@@ -107,6 +108,8 @@ int main(int argc, char* argv[]) {
         filename = get_config_path();
     }
 
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
 
     if (watch==0) {
         service_watcher(filename);
@@ -126,7 +129,10 @@ int main(int argc, char* argv[]) {
         }
 
         const struct timespec *wake = before(&next_1, &next_2) ? &next_1 : &next_2;
-        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, wake, NULL) == EINTR);
+        int ret;
+        do {
+            ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, wake, NULL);
+        } while (ret == EINTR);
     }
 
     
