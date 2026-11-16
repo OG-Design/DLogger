@@ -1,9 +1,39 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <sys/resource.h>
+#include <time.h>
 #include "utils.h"
+#include "reporter/reporter.h"
+
+// typedef enum { MODE_DEV, MODE_SERVICE } RunMode;
+
+RunMode get_run_mode(void) {
+    const char *mode = getenv("DLOGGER_MODE");
+    if (mode && strcmp(mode, "service") == 0) return MODE_SERVICE;
+    return MODE_DEV;
+}
+
+const char* get_data_dir(void) {
+    if (get_run_mode() == MODE_SERVICE) return "/var/lib/dlogger";
+    return "./data";
+}
+
+char* get_config_path(void) {
+    if (get_run_mode() == MODE_SERVICE) return "/etc/dlogger/config.json";
+    return "./data/config.json";
+}
+
+const char* get_reports_dir(void) {
+    static char reports_path[512];
+    const char *data_dir = get_data_dir();
+    snprintf(reports_path, sizeof(reports_path), "%s/reports", data_dir);
+    return reports_path;
+}
 
 cJSON* parse_json(char file_path[256]) {
     FILE *file = fopen(file_path, "rb");
@@ -25,7 +55,7 @@ cJSON* parse_json(char file_path[256]) {
         return NULL;
     }
 
-    printf("Length of file: %ld\n", length);
+    // printf("Length of file: %ld\n", length);
 
     char *buffer_config = malloc((size_t)length + 1);
     if (buffer_config == NULL) {
@@ -49,7 +79,7 @@ cJSON* parse_json(char file_path[256]) {
     }
     buffer_config[read_size] = '\0';
 
-    printf("Contents of config:\n---\n%s\n---\n", buffer_config);
+    // printf("Contents of config:\n---\n%s\n---\n", buffer_config);
     
     cJSON *json = cJSON_Parse(buffer_config);
 
@@ -107,6 +137,10 @@ char ** parse_services(cJSON* json) {
 
     cJSON *service;
     cJSON_ArrayForEach(service, json) {
+        if (service_count >= (size_t)item_count) {
+            fprintf(stderr, "Service list exceeds expected size\n");
+            break;
+        }
         if(!cJSON_IsString(service) || service->valuestring == NULL) continue;
         size_t length = strlen(service->valuestring) + 1;
         services[service_count] = malloc(length);
@@ -118,7 +152,6 @@ char ** parse_services(cJSON* json) {
             service_count=0;
             return NULL;
         }
-        printf("%s\n", service->valuestring);
         
         memcpy(services[service_count], service->valuestring, length);
         (service_count)++;
@@ -141,7 +174,7 @@ char ** parse_procs_array(cJSON* json_procs, size_t *proc_count) {
     }
     if (item_count == 0)
         return NULL;
-    char **procs = calloc((size_t)item_count, sizeof *procs);
+    char **procs = calloc((size_t)item_count + 1, sizeof *procs);
 
     if (procs == NULL) {
         fprintf(stderr, "Failed to allocate process list\n");
@@ -151,6 +184,10 @@ char ** parse_procs_array(cJSON* json_procs, size_t *proc_count) {
     
     cJSON *proc;
     cJSON_ArrayForEach(proc, json_procs) {
+        if (*proc_count >= (size_t)item_count) {
+            fprintf(stderr, "Process list exceeds expected size\n");
+            break;
+        }
             
         if (!cJSON_IsString(proc) || proc->valuestring == NULL) continue;
         
@@ -164,7 +201,6 @@ char ** parse_procs_array(cJSON* json_procs, size_t *proc_count) {
             *proc_count=0;
             return NULL;
         }
-        printf("%s\n", proc->valuestring);
         
         memcpy(procs[*proc_count], proc->valuestring, length);
         (*proc_count)++;
@@ -216,4 +252,163 @@ int add_service(char *file_path, char *service)
 cleanup:
     cJSON_Delete(json);
     return result;
+}
+
+int rem_service(char *file_path, char *service)
+{
+    cJSON *json = parse_json(file_path);
+    if (json == NULL) {
+        fprintf(stderr, "Could not parse configuration file: %s\n", file_path);
+        return 1;
+    }
+
+    int result = 1;
+    cJSON *services = cJSON_GetObjectItemCaseSensitive(json, "services");
+
+    if (!cJSON_IsArray(services)) {
+        fprintf(stderr, "Could not parse services: %s\n", file_path);
+        goto cleanup;
+    }
+
+    cJSON *item;
+    int index = 0;
+
+    cJSON_ArrayForEach(item, services) {
+        if (cJSON_IsString(item) && item->valuestring != NULL &&
+            strcmp(item->valuestring, service) == 0) {
+            cJSON_DeleteItemFromArray(services, index);
+            result = write_json(file_path, json);
+            goto cleanup;
+        }
+        index++;
+    }
+
+    fprintf(stderr, "No match found for %s\n", service);
+
+cleanup:
+    cJSON_Delete(json);
+    return result;
+}
+
+
+int append_string(char ***array, size_t *count, const char *new_str)
+{
+    if (*count >= SIZE_MAX / sizeof(**array))
+        return -1;
+    char **temp = realloc(*array, (*count + 1) * sizeof(*temp));
+    if (temp == NULL)
+        return -1;
+    *array = temp;
+
+    (*array)[*count] = strdup(new_str);
+    if ((*array)[*count] == NULL)
+        return -1;
+
+    (*count)++;
+    return 0;
+}
+
+
+int write_report(char *file_path, char *plain_text)
+{
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        fprintf(stderr, "Could not get current time\n");
+        return 1;
+    }
+
+    struct tm *utc_time = gmtime(&now);
+    if (utc_time == NULL) {
+        fprintf(stderr, "Could not convert time to UTC\n");
+        return 1;
+    }
+
+    char timestamp[32];
+    if (strftime(timestamp, sizeof(timestamp), "%Y%m%dT%H%M%SZ", utc_time) == 0) {
+        fprintf(stderr, "Could not format timestamp\n");
+        return 1;
+    }
+
+    char filename[512];
+    int length = snprintf(filename, sizeof(filename), "%s/report-%s.txt",
+                          file_path, timestamp);
+    if (length < 0 || (size_t)length >= sizeof(filename)) {
+        fprintf(stderr, "Report filename is too long\n");
+        return 1;
+    }
+
+    FILE *file = fopen(filename, "wx");
+    if (file == NULL) {
+        perror("Could not create report");
+        return 1;
+    }
+
+    int result = 0;
+    if (fputs(plain_text, file) == EOF) {
+        perror("Could not write report");
+        result = 1;
+    }
+    if (fclose(file) == EOF) {
+        perror("Could not close report");
+        result = 1;
+    }
+
+    return result;
+}
+
+int send_report_smtp(char *config_path, const char * report_dir) {
+    char **files = NULL;
+    size_t count = 0;
+    if (read_report_files(config_path, report_dir, &files, &count) != 0) {
+        return 1;
+    }
+    
+    char** accumilated_reports = NULL;
+    size_t accumilated_reports_count = 0;
+
+
+    for (size_t i = 0; i < count; i++) {
+        // printf("file %d, %s\n", (int)i, files[(int)i]);
+        size_t size = strlen(report_dir)+ strlen(files[i]) + 2;
+        char* file_path = malloc(size);
+
+        if (file_path == NULL) {
+            perror("Couldn't allocate file path\n");
+            break;
+        }
+
+        snprintf(file_path, size, "%s/%s", report_dir ,files[i]);
+        
+        char *content = NULL;
+        get_content_from_report(file_path, &content);
+        // printf("---\nContent:\n%s\n---\n", content);
+    
+        append_string(&accumilated_reports, &accumilated_reports_count, content);
+
+        free(content);
+        free(file_path);
+        
+
+    }
+
+    if (accumilated_reports == NULL) {
+        perror("Couldn't read the accumilated reports\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        free(files[i]);
+    }
+    free(files);
+    return 0;
+}
+
+void log_peak_memory(void) {
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) != 0) {
+        perror("getrusage error\n");
+        return;
+    }
+
+    printf("Peak memory %ld KiB\n", usage.ru_maxrss);
 }

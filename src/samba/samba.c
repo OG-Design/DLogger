@@ -32,7 +32,7 @@ pid_t get_pid(const char *process_name) {
 
         if (is_pid) {
             char comm_path[256];
-            char current_name[256];
+            char current_name[512];
 
             FILE *comm_file;
 
@@ -62,7 +62,7 @@ pid_t get_pid(const char *process_name) {
 int samba() {
     
     printf("Running samba logger\n");
-    char fp [256] ="./data/config.json";
+    char *fp = (char*)get_config_path();
     cJSON *json = parse_json(fp);
     if (json == NULL) {
         fprintf(stderr, "Could not parse configuration file: %s\n", fp);

@@ -2,6 +2,8 @@ CFLAGS=-Wall -Wextra -std=c11 -g
 SYSTEMD_CFLAGS=$(shell pkg-config --cflags libsystemd)
 SYSTEMD_LIBS=$(shell pkg-config --libs libsystemd)
 
+appname=dlogger
+
 outdir=./dist/out
 
 srcdir=./src
@@ -9,6 +11,7 @@ srcdir=./src
 main_o=main.o
 samba_o=samba.o
 cjson_o=cjson.o
+reporter_o=reporter.o
 
 sambadir=$(srcdir)/samba
 samba_c=samba.c
@@ -23,24 +26,26 @@ systemd_o=systemd.o
 systemddir=$(srcdir)/systemd
 systemd_c=systemd.c
 systemd_src=$(systemddir)/$(systemd_c)
-systemd_out=$(outdir)/systemd_o
+systemd_out=$(outdir)/$(systemd_o)
 
 utils_c=utils.c
 utils_src=$(srcdir)/$(utils_c)
 utils_o=utils.o
 utils_out=$(outdir)/$(utils_o)
 
+reporter_src=$(srcdir)/reporter/reporter.c
+reporter_out=$(outdir)/$(reporter_o)
 
 main_out=$(outdir)/$(main_o)
 samba_out=$(outdir)/$(samba_o)
 
 .PHONY: all clean
 
-all: main
+all: $(appname)
 
 # This is a comment
-main: $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out)
-	gcc $(CFLAGS) $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(SYSTEMD_LIBS) -o ./dist/out/main
+$(appname): $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out)
+	gcc $(CFLAGS) $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out) $(SYSTEMD_LIBS) -o ./dist/out/$(appname)
 
 $(main_out): ./src/main.c
 	@mkdir -p $(outdir)
@@ -62,6 +67,9 @@ $(utils_out): $(utils_src)
 	@mkdir -p $(outdir)
 	gcc -c $(utils_src) -o $@
 
+$(reporter_out): $(reporter_src) $(srcdir)/reporter/reporter.h $(srcdir)/utils.h
+	@mkdir -p $(outdir)
+	gcc -c $(reporter_src) -o $@
 
 clean: 
-	rm -rf ./dist main
+	rm -rf ./dist $(appname)

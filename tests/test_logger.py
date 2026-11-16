@@ -12,20 +12,26 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(os.environ.get("LOGGER_TEST_BINARY", ROOT / "dist/out/main"))
 
 
-def active_service():
+def active_services():
     try:
         result = subprocess.run(
-            ["systemctl", "list-units", "--type=service", "--state=active",
+            ["systemctl", "list-units", "--type=service", "--state=running",
              "--no-legend", "--plain", "--no-pager"],
             capture_output=True, text=True, timeout=10, check=True,
         )
     except (OSError, subprocess.SubprocessError):
-        return None
+        return []
+    services = []
     for line in result.stdout.splitlines():
         fields = line.split()
         if fields and fields[0].endswith(".service"):
-            return fields[0]
-    return None
+            services.append(fields[0])
+    return services
+
+
+def active_service():
+    services = active_services()
+    return services[0] if services else None
 
 
 class LoggerTests(unittest.TestCase):
@@ -33,6 +39,9 @@ class LoggerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.config = Path(self.tmp.name) / "config.json"
+        self.workdir = Path(self.tmp.name) / "work"
+        self.report_dir = self.workdir / "data/reports"
+        self.report_dir.mkdir(parents=True)
 
     def write_config(self, services):
         self.config.write_text(json.dumps({"services": services, "procs": []}))
@@ -40,7 +49,7 @@ class LoggerTests(unittest.TestCase):
     def run_logger(self, *args, env=None):
         return subprocess.run(
             [str(BINARY), "-f", str(self.config), *args],
-            cwd=ROOT, capture_output=True, text=True, env=env, timeout=15,
+            cwd=self.workdir, capture_output=True, text=True, env=env, timeout=15,
         )
 
     def test_invalid_service_entry_is_rejected(self):
@@ -78,6 +87,50 @@ class LoggerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(self.config.read_text())["services"], ["example.service"])
 
+    def test_empty_report(self):
+        if active_service() is None:
+            self.skipTest("No accessible systemd manager with an active service")
+        self.write_config([])
+        result = self.run_logger()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reports = list(self.report_dir.glob("report-*.txt"))
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0].read_text(), "")
+
+    def test_missing_report_directory_is_an_error(self):
+        if active_service() is None:
+            self.skipTest("No accessible systemd manager with an active service")
+        self.write_config([])
+        self.report_dir.rmdir()
+        result = self.run_logger()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not create report", result.stderr)
+
+    def test_report_contains_processes_for_multiple_services(self):
+        services = active_services()[:2]
+        if len(services) < 2:
+            self.skipTest("Need two running systemd services")
+        self.write_config(services)
+        result = self.run_logger()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reports = list(self.report_dir.glob("report-*.txt"))
+        self.assertEqual(len(reports), 1)
+        report = reports[0].read_text()
+
+        for service in services:
+            self.assertIn(f"SERVICE: {service}\n", report)
+            self.assertIn(f"Service: {service}\n", report)
+
+        process_lines = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("    PID: ")
+        ]
+        self.assertTrue(process_lines, result.stdout)
+        for line in process_lines:
+            self.assertIn(line + "\n", report)
+            self.assertIn(" Name: ", line)
+            self.assertIn(" Cgroup: ", line)
+
     def test_once_and_repeated_watch(self):
         service = active_service()
         if service is None:
@@ -91,10 +144,12 @@ class LoggerTests(unittest.TestCase):
         self.assertIn(f"Service: {service}", result.stdout)
 
         output_path = Path(self.tmp.name) / "watch.log"
+        watch_dir = Path(self.tmp.name) / "watch"
+        (watch_dir / "data/reports").mkdir(parents=True)
         with output_path.open("w") as output:
             process = subprocess.Popen(
                 [str(BINARY), "-f", str(self.config), "-w", "1"],
-                cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
+                cwd=watch_dir, stdout=output, stderr=subprocess.STDOUT,
             )
             try:
                 snapshots = 0

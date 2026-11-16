@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,6 +83,10 @@ int list_service(struct Service_List *result)
                 goto cleanup;
             }
             int new_capacity = capacity ? capacity * 2 : 10;
+            if (capacity > 0 && new_capacity < capacity) {
+                fprintf(stderr, "Service list capacity overflow\n");
+                goto cleanup;
+            }
             if ((size_t)new_capacity > SIZE_MAX / sizeof(*result->services)) {
                 fprintf(stderr, "Service list is too large\n");
                 goto cleanup;
@@ -123,7 +128,41 @@ cleanup:
     return status;
 }
 
-static int get_service_states(char *services[], size_t count)
+static int append_report(char **report, size_t *length, const char *format, ...)
+{
+    va_list args, copy;
+    va_start(args, format);
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+
+    if (needed < 0 || (size_t)needed > SIZE_MAX - *length - 1) {
+        fprintf(stderr, "Could not format report\n");
+        va_end(args);
+        return -1;
+    }
+
+    size_t new_size = *length + (size_t)needed + 1;
+    char *expanded = realloc(*report, new_size);
+    if (expanded == NULL) {
+        fprintf(stderr, "Failed to grow report\n");
+        va_end(args);
+        return -1;
+    }
+    *report = expanded;
+
+    int written = vsnprintf(*report + *length, new_size - *length, format, args);
+    va_end(args);
+    if (written != needed) {
+        fprintf(stderr, "Could not format report\n");
+        return -1;
+    }
+    *length += (size_t)written;
+    return 0;
+}
+
+static int get_service_states(char *services[], size_t count,
+                              char **report, size_t *report_len)
 {
     sd_bus *bus = NULL;
     sd_bus_error error = SD_BUS_ERROR_NULL;
@@ -156,9 +195,16 @@ static int get_service_states(char *services[], size_t count)
 
         const char *name, *cgroup;
         uint32_t pid;
-        printf("Service: %s\n", services[i]);
-        while ((r = sd_bus_message_read(reply, "(sus)", &cgroup, &pid, &name)) > 0)
-            printf("    PID: %" PRIu32 " Name: %s Cgroup: %s\n", pid, name, cgroup);
+        // printf("Service: %s\n", services[i]);
+        if (append_report(report, report_len, "Service: %s\n", services[i]) < 0)
+            goto cleanup;
+        while ((r = sd_bus_message_read(reply, "(sus)", &cgroup, &pid, &name)) > 0) {
+            // printf("    PID: %" PRIu32 " Name: %s Cgroup: %s\n", pid, name, cgroup);
+            if (append_report(report, report_len,
+                              "    PID: %" PRIu32 " Name: %s Cgroup: %s\n",
+                              pid, name, cgroup) < 0)
+                goto cleanup;
+        }
         if (r < 0 || (r = sd_bus_message_exit_container(reply)) < 0) {
             fprintf(stderr, "Failed to read processes for %s: %s\n",
                     services[i], strerror(-r));
@@ -176,28 +222,13 @@ cleanup:
     return result;
 }
 
-static int append_string(char ***array, size_t *count, const char *new_str)
-{
-    if (*count >= SIZE_MAX / sizeof(**array))
-        return -1;
-    char **temp = realloc(*array, (*count + 1) * sizeof(*temp));
-    if (temp == NULL)
-        return -1;
-    *array = temp;
 
-    (*array)[*count] = strdup(new_str);
-    if ((*array)[*count] == NULL)
-        return -1;
-
-    (*count)++;
-    return 0;
-}
 
 int get_conf_services_data(char *file_path)
 {
-    printf("Getting configured services.\n---\n");
+    // printf("Getting configured services.\n---\n");
     if (file_path == NULL)
-        file_path = "./data/config.json";
+        file_path = (char*)get_config_path();
 
     cJSON *json = parse_json(file_path);
     if (json == NULL) {
@@ -223,9 +254,18 @@ int get_conf_services_data(char *file_path)
     struct Service_List found_services = {0};
     char **use_services = NULL;
     size_t use_count = 0;
+    char *fmt_report = NULL;
+    size_t report_len = 0;
     int result = 1;
     if (list_service(&found_services) != 0)
         goto cleanup;
+
+    fmt_report = calloc(1, 1);
+
+    if (fmt_report == NULL) {
+        fprintf(stderr, "Failed to allocate report\n");
+        goto cleanup;
+    }
 
     for (int i = 0; i < found_services.count; i++) {
         struct Service_Data f_service = found_services.services[i];
@@ -235,13 +275,20 @@ int get_conf_services_data(char *file_path)
                     fprintf(stderr, "Failed to allocate service name\n");
                     goto cleanup;
                 }
-                printf("Service found\n---\nSERVICE: %s\nSUB_STATE: %s\nMAIN_PID: %" PRIu32 "\n---\n\n",
-                       cs->valuestring, f_service.sub_state, f_service.main_pid);
+                // printf("Service found\n---\nSERVICE: %s\nSUB_STATE: %s\nMAIN_PID: %" PRIu32 "\n---\n\n",
+                //        cs->valuestring, f_service.sub_state, f_service.main_pid);
+
+                if (append_report(&fmt_report, &report_len,
+                                  "---\nSERVICE: %s\nSUB_STATE: %s\n"
+                                  "MAIN_PID: %" PRIu32 "\n---\n\n",
+                                  f_service.name, f_service.sub_state,
+                                  f_service.main_pid) < 0)
+                    goto cleanup;
             }
         }
     }
-    printf("---\n");
-    if (get_service_states(use_services, use_count) != 0)
+    // printf("---\n");
+    if (get_service_states(use_services, use_count, &fmt_report, &report_len) != 0)
         goto cleanup;
     result = 0;
 
@@ -251,5 +298,10 @@ cleanup:
     free(use_services);
     free_service_list(&found_services);
     cJSON_Delete(json);
+    if (result == 0) {
+        if (write_report((char*)get_reports_dir(), fmt_report) != 0)
+            result = 1;
+    }
+    free(fmt_report);
     return result;
 }
