@@ -120,9 +120,9 @@ int main(int argc, char* argv[]) {
             service_watcher(filename);
             add_ms(&next_1, (long) watch * 1000);
         }
-        if (!before(&now, &next_2)) {
+        if (email_watch > 0 && !before(&now, &next_2)) {
             smtp_watcher(filename);
-            add_ms(&next_2, email_watch * 1000);
+            add_ms(&next_2, (long) email_watch * 1000);
         }
 
         const struct timespec *wake = before(&next_1, &next_2) ? &next_1 : &next_2;

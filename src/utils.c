@@ -393,8 +393,15 @@ int send_report_smtp(char *config_path, const char * report_dir) {
 
     if (accumilated_reports == NULL) {
         perror("Couldn't read the accumilated reports\n");
+        for (size_t i = 0; i < count; i++)
+            free(files[i]);
+        free(files);
         return 1;
     }
+
+    for (size_t i = 0; i < accumilated_reports_count; i++)
+        free(accumilated_reports[i]);
+    free(accumilated_reports);
 
     for (size_t i = 0; i < count; i++) {
         free(files[i]);
