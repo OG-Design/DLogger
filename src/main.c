@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
         }
 
         const struct timespec *wake = before(&next_1, &next_2) ? &next_1 : &next_2;
-        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, wake, NULL);
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, wake, NULL) == EINTR);
     }
 
     
