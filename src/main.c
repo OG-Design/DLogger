@@ -190,7 +190,6 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-
     for (;;) {
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (!before(&now, &next_1)) {
@@ -202,15 +201,18 @@ int main(int argc, char* argv[]) {
             add_ms(&next_2, (long) email_watch * 1000);
         }
 
-        const struct timespec *wake = before(&next_1, &next_2) ? &next_1 : &next_2;
+        // Select wake time: use only next_1 if email is disabled
+        const struct timespec *wake;
+        if (email_watch == 0) {
+            wake = &next_1;
+        } else {
+            wake = before(&next_1, &next_2) ? &next_1 : &next_2;
+        }
+        
         int ret;
         do {
             ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, wake, NULL);
         } while (ret == EINTR);
-        
-        if (ret != 0) {
-            fprintf(stderr, "clock_nanosleep error: %d\n", ret);
-        }
     }
 
     
