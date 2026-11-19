@@ -27,6 +27,11 @@ sudo cp -r ../data/reports/* /var/lib/dlogger/reports/ 2>/dev/null || true
 sudo cp ../dist/out/dlogger /usr/bin/dlogger
 sudo chmod 755 /usr/bin/dlogger
 
+# Install Python SMTP fallback script
+sudo mkdir -p /usr/libexec/dlogger
+sudo cp ../bin/send_mail.py /usr/libexec/dlogger/
+sudo chmod 755 /usr/libexec/dlogger/send_mail.py
+
 # Get SMTP password and encrypt it
 read -rsp 'SMTP password: ' pw; echo
 if [ -z "$pw" ]; then

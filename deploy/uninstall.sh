@@ -9,6 +9,7 @@ sudo systemctl daemon-reload
 
 sudo rm -f /etc/systemd/system/dlogger.service
 sudo rm -f /usr/bin/dlogger
+sudo rm -rf /usr/libexec/dlogger
 sudo rm -f /etc/smtp_password.cred
 
 echo "Service and binary removed."

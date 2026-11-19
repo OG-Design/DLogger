@@ -573,8 +573,9 @@ int send_mail_report(char *file_path) {
                     }
                     fclose(body_file);
                     
-                    // Build recipients array
-                    char recipients_arg[2048] = "[\"";
+                    // Build recipients array safely
+                    char recipients_arg[2048];
+                    int offset = snprintf(recipients_arg, sizeof(recipients_arg), "[\"");
                     int first = 1;
                     cJSON *rcpt = NULL;
                     cJSON_ArrayForEach(rcpt, service_accounts) {
@@ -587,28 +588,60 @@ int send_mail_report(char *file_path) {
                                 continue;
                             }
                             
-                            if (!first) strcat(recipients_arg, "\",\"");
-                            strcat(recipients_arg, to->valuestring);
+                            if (!first) {
+                                offset += snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "\",\"");
+                            }
+                            offset += snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "%s", to->valuestring);
                             first = 0;
+                            
+                            if (offset >= sizeof(recipients_arg) - 10) {
+                                fprintf(stderr, "Warning: Recipients list too long, truncating\n");
+                                break;
+                            }
                         }
                     }
-                    strcat(recipients_arg, "\"]");
+                    snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "\"]");
                     
-                    // Execute Python fallback
-                    char cmd[4096];
-                    snprintf(cmd, sizeof(cmd), 
-                        "DLOGGER_SMTP_PASSWORD='%s' python3 '%s/bin/send_mail.py' '%s' '%s' '%s' 2>/dev/null",
-                        password, 
-                        "/mnt/c/Users/Marcus/Documents/GitHub/Logger",
-                        file_path,
-                        recipients_arg,
-                        temp_body_path);
+                    // Execute Python fallback - check multiple locations
+                    const char* script_locations[] = {
+                        "/usr/libexec/dlogger/send_mail.py",
+                        "/usr/lib/dlogger/send_mail.py",
+                        "/opt/dlogger/bin/send_mail.py",
+                        NULL
+                    };
                     
-                    if (system(cmd) == 0) {
-                        fprintf(stderr, "Python SMTP fallback succeeded\n");
-                        result = 0;
-                    } else {
+                    char script_path[256] = {0};
+                    int script_found = 0;
+                    for (int i = 0; script_locations[i] != NULL; i++) {
+                        if (access(script_locations[i], X_OK) == 0) {
+                            strcpy(script_path, script_locations[i]);
+                            script_found = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (!script_found) {
+                        fprintf(stderr, "Error: send_mail.py not found in standard locations\n");
+                        fprintf(stderr, "Checked: /usr/libexec/dlogger/, /usr/lib/dlogger/, /opt/dlogger/bin/\n");
                         result = 1;
+                    } else {
+                        char cmd[4096];
+                        snprintf(cmd, sizeof(cmd), 
+                            "DLOGGER_SMTP_PASSWORD='%s' python3 '%s' '%s' '%s' '%s'",
+                            password, 
+                            script_path,
+                            file_path,
+                            recipients_arg,
+                            temp_body_path);
+                        
+                        int ret = system(cmd);
+                        if (ret == 0) {
+                            fprintf(stderr, "Python SMTP fallback succeeded\n");
+                            result = 0;
+                        } else {
+                            fprintf(stderr, "Python SMTP fallback failed with exit code %d\n", ret);
+                            result = 1;
+                        }
                     }
                     
                     unlink(temp_body_path);
