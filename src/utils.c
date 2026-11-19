@@ -293,9 +293,12 @@ cleanup:
 
 int append_string(char ***array, size_t *count, const char *new_str)
 {
-    if (*count >= SIZE_MAX / sizeof(**array))
+    if (array == NULL || count == NULL || new_str == NULL)
         return -1;
-    char **temp = realloc(*array, (*count + 1) * sizeof(*temp));
+
+    if (*count >= (SIZE_MAX / sizeof(**array)) - 1)
+        return -1;
+    char **temp = realloc(*array, (*count + 2) * sizeof(*temp));
     if (temp == NULL)
         return -1;
     *array = temp;
@@ -305,6 +308,7 @@ int append_string(char ***array, size_t *count, const char *new_str)
         return -1;
 
     (*count)++;
+    (*array)[*count] = NULL;
     return 0;
 }
 

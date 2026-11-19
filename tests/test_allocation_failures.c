@@ -75,6 +75,20 @@ int main(int argc, char **argv)
     free(services);
     cJSON_Delete(array);
 
+    char **strings = NULL;
+    size_t strings_count = 0;
+    if (append_string(&strings, &strings_count, "alpha") != 0 ||
+        append_string(&strings, &strings_count, "beta") != 0 ||
+        strings_count != 2 || strings[2] != NULL ||
+        strcmp(strings[0], "alpha") != 0 || strcmp(strings[1], "beta") != 0) {
+        fprintf(stderr, "append_string did not preserve NULL termination\n");
+        free(strings);
+        return 1;
+    }
+    free(strings[0]);
+    free(strings[1]);
+    free(strings);
+
     fail_malloc = 1;
     cJSON *json = parse_json(argv[1]);
     if (fail_malloc || json != NULL || count_fds() != before) {
