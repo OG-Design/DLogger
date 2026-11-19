@@ -101,9 +101,7 @@ int main(int argc, char* argv[]) {
                 printf("Usage: %s [options]\n", argv[0]);
                 printf("  -f <file>     Config file path\n");
                 printf("  -w <seconds>  Watch interval (service check frequency)\n");
-                printf("                Enables continuous monitoring mode\n");
                 printf("  -e <seconds>  Email interval (mail report frequency)\n");
-                printf("                Only active if -w is also specified\n");
                 printf("  -s <service>  Add service to watch list\n");
                 printf("  -d <service>  Remove service from watch list\n");
                 printf("  -m <email>    Add mail recipient\n");
@@ -115,13 +113,15 @@ int main(int argc, char* argv[]) {
                 printf("  send-mail-interval-hr: Email report interval in hours\n");
                 printf("  send-mail:             Enable email reports (1=enabled, 0=disabled)\n");
                 printf("\nBehavior:\n");
-                printf("  Plain run (no args): Service check once and exit\n");
-                printf("  With -w only:        Continuous service monitoring\n");
-                printf("  With -w and -e:      Service monitoring + periodic email reports\n");
+                printf("  Plain run (no args):   Load all intervals from config and run as daemon\n");
+                printf("  With -w only:          Use -w value, optionally load email from config\n");
+                printf("  With -w and -e:        Use both -w and -e values\n");
+                printf("  Other options:         One-time operations (no daemon mode)\n");
                 printf("\nExamples:\n");
-                printf("  %s                        # Service check once and exit\n", argv[0]);
+                printf("  %s                        # Use config defaults, run as daemon\n", argv[0]);
                 printf("  %s -w 60                  # Service check every 60 seconds\n", argv[0]);
                 printf("  %s -w 3600 -e 86400       # Check every hour, email every 24hrs\n", argv[0]);
+                printf("  %s -t                     # Send test mail report (one-time)\n", argv[0]);
                 return 0;
             case 's':
                 return add_service(filename, optarg);
@@ -143,19 +143,40 @@ int main(int argc, char* argv[]) {
     signal(SIGPIPE, SIG_IGN);
     signal(SIGCHLD, SIG_IGN);
 
-    // If watch interval was provided via CLI and is non-zero, optionally load email interval default
-    // Otherwise, plain run = service check once and exit (no defaults loaded)
-    if (watch > 0 && email_watch == 0) {
+    // Load intervals from config if neither -w nor -e were provided via CLI
+    if (watch == 0 && email_watch == 0) {
+        // Both unspecified - load from config
         cJSON *config = parse_json(filename);
         if (config != NULL) {
             cJSON *properties = cJSON_GetObjectItemCaseSensitive(config, "properties");
             if (properties != NULL) {
-                // Load email interval default if -e wasn't specified but -w was
-                cJSON *email_interval = cJSON_GetObjectItemCaseSensitive(properties, "send-mail-interval-hr");
-                if (email_interval != NULL && cJSON_IsNumber(email_interval)) {
-                    // Only load if send-mail property is enabled
-                    cJSON *send_mail = cJSON_GetObjectItemCaseSensitive(properties, "send-mail");
-                    if (send_mail != NULL && cJSON_IsBool(send_mail) && cJSON_IsTrue(send_mail)) {
+                // Load watch interval
+                cJSON *watch_interval = cJSON_GetObjectItemCaseSensitive(properties, "watch-interval-sec");
+                if (watch_interval != NULL && cJSON_IsNumber(watch_interval)) {
+                    watch = (unsigned int)watch_interval->valuedouble;
+                }
+                
+                // Load email interval if send-mail is enabled
+                cJSON *send_mail = cJSON_GetObjectItemCaseSensitive(properties, "send-mail");
+                if (send_mail != NULL && cJSON_IsBool(send_mail) && cJSON_IsTrue(send_mail)) {
+                    cJSON *email_interval = cJSON_GetObjectItemCaseSensitive(properties, "send-mail-interval-hr");
+                    if (email_interval != NULL && cJSON_IsNumber(email_interval)) {
+                        email_watch = (unsigned int)(email_interval->valuedouble * 3600);
+                    }
+                }
+            }
+            cJSON_Delete(config);
+        }
+    } else if (watch > 0 && email_watch == 0) {
+        // Only -w specified, optionally load email from config if enabled
+        cJSON *config = parse_json(filename);
+        if (config != NULL) {
+            cJSON *properties = cJSON_GetObjectItemCaseSensitive(config, "properties");
+            if (properties != NULL) {
+                cJSON *send_mail = cJSON_GetObjectItemCaseSensitive(properties, "send-mail");
+                if (send_mail != NULL && cJSON_IsBool(send_mail) && cJSON_IsTrue(send_mail)) {
+                    cJSON *email_interval = cJSON_GetObjectItemCaseSensitive(properties, "send-mail-interval-hr");
+                    if (email_interval != NULL && cJSON_IsNumber(email_interval)) {
                         email_watch = (unsigned int)(email_interval->valuedouble * 3600);
                     }
                 }
