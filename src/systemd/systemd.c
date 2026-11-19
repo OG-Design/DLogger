@@ -196,15 +196,16 @@ static int get_service_states(char *services[], size_t count,
         const char *name, *cgroup;
         uint32_t pid;
         // printf("Service: %s\n", services[i]);
-        if (append_report(report, report_len, "Service: %s\n", services[i]) < 0)
+        if (append_report(report, report_len, "---\nService: %s\n", services[i]) < 0)
             goto cleanup;
         while ((r = sd_bus_message_read(reply, "(sus)", &cgroup, &pid, &name)) > 0) {
             // printf("    PID: %" PRIu32 " Name: %s Cgroup: %s\n", pid, name, cgroup);
             if (append_report(report, report_len,
-                              "    PID: %" PRIu32 " Name: %s Cgroup: %s\n",
+                              "---\n\tPID: %" PRIu32 " Name: %s Cgroup: %s\n---\n",
                               pid, name, cgroup) < 0)
                 goto cleanup;
         }
+        append_report(report, report_len, "---\n");
         if (r < 0 || (r = sd_bus_message_exit_container(reply)) < 0) {
             fprintf(stderr, "Failed to read processes for %s: %s\n",
                     services[i], strerror(-r));
@@ -275,8 +276,6 @@ int get_conf_services_data(char *file_path)
                     fprintf(stderr, "Failed to allocate service name\n");
                     goto cleanup;
                 }
-                // printf("Service found\n---\nSERVICE: %s\nSUB_STATE: %s\nMAIN_PID: %" PRIu32 "\n---\n\n",
-                //        cs->valuestring, f_service.sub_state, f_service.main_pid);
 
                 if (append_report(&fmt_report, &report_len,
                                   "---\nSERVICE: %s\nSUB_STATE: %s\n"
@@ -287,7 +286,23 @@ int get_conf_services_data(char *file_path)
             }
         }
     }
-    // printf("---\n");
+
+    cJSON_ArrayForEach(cs, services_array) {
+        int found = 0;
+        for (size_t i = 0; i < use_count; i++) {
+            if (strcmp(cs->valuestring, use_services[i]) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            if (append_report(&fmt_report, &report_len,
+                              "---\nSERVICE: %s\nSUB_STATE: down\n"
+                              "MAIN_PID: 0\n---\n\n",
+                              cs->valuestring) < 0)
+                goto cleanup;
+        }
+    }
     if (get_service_states(use_services, use_count, &fmt_report, &report_len) != 0)
         goto cleanup;
     result = 0;

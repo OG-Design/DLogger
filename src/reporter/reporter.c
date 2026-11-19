@@ -37,7 +37,7 @@ static void free_report_files(char **files, size_t count)
     free(files);
 }
 
-static int get_report_files(const char *report_dir, const char *start_date,
+int get_report_files(const char *report_dir, const char *start_date,
                             const char *end_date, char ***files, size_t *count)
 {
     DIR *dir = opendir(report_dir);
@@ -102,7 +102,7 @@ static int format_days_ago(time_t now, int days, char date_string[9])
     return 0;
 }
 
-static int get_configured_range(char *config_path, int *near_days, int *far_days)
+int get_configured_range(char *config_path, int *near_days, int *far_days)
 {
     cJSON *json = parse_json(config_path);
     if (json == NULL) {
@@ -170,6 +170,7 @@ int read_report_files(char *config_path, const char *report_dir,
 
     return get_report_files(report_dir, start_date, end_date, files, count);
 }
+
 
 int get_content_from_report(char *file_path, char **content) {
     FILE *file = fopen(file_path, "rb");

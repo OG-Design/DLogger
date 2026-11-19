@@ -1,3 +1,6 @@
 *dist/
 *__pycache__/
 data/reports/report*
+*.cred
+*.key
+data/config.json

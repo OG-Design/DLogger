@@ -1,0 +1,1 @@
+cp ./data/config-default.json ./data/config.json

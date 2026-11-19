@@ -14,8 +14,8 @@
 
 RunMode get_run_mode(void) {
     const char *mode = getenv("DLOGGER_MODE");
-    if (mode && strcmp(mode, "service") == 0) return MODE_SERVICE;
-    return MODE_DEV;
+    if (mode && strcmp(mode, "dev") == 0) return MODE_DEV;
+    return MODE_SERVICE;
 }
 
 const char* get_data_dir(void) {
@@ -418,4 +418,247 @@ void log_peak_memory(void) {
     }
 
     printf("Peak memory %ld KiB\n", usage.ru_maxrss);
+}
+
+int gen_now_date(struct tm *utc_time) {
+    time_t now = time(NULL);
+    if (now == (time_t)-1) {
+        fprintf(stderr, "Could not get current time\n");
+        return 1;
+    }
+
+    utc_time = gmtime(&now);
+    if (utc_time == NULL) {
+        fprintf(stderr, "Could not convert time to UTC\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+struct tm add_days(struct tm current_time, int days_later) {
+    time_t epoch = timegm(&current_time);
+
+    epoch += (time_t)days_later * 86400;
+
+    struct tm result;
+
+    gmtime_r(&epoch, &result);
+
+    return result;
+}
+
+struct tm parse_date_str(char *date_str) {
+    struct tm expires_time = {0};
+    if(sscanf(date_str, "%4d%2d%2d", &expires_time.tm_year, &expires_time.tm_mon, &expires_time.tm_mday) != 3) {
+        fprintf(stderr, "Invalid expires format %s\n", date_str);
+    }
+    expires_time.tm_year -= 1900;
+    expires_time.tm_mon -= 1;
+    return expires_time;
+}
+
+// 0 == expired, 1 == valid 
+int is_not_expired_tm(struct tm current, struct tm expiry) {
+    time_t current_epoch = timegm(&current);
+    time_t expiry_epoch = timegm(&expiry);
+    if (current_epoch > expiry_epoch) return 0;
+    return 1;
+}
+
+int safein(char *buffer, char *msg, int retry) {
+    
+    if (retry <= 0) {
+        retry = 1;
+    }
+
+    int fail = 1;
+    
+    for (int i = 0; i < retry; i++) {
+        printf("%s", msg);
+        fflush(stdout);
+        
+        if (fgets(buffer, 512, stdin) == NULL) {
+            fprintf(stderr, "Error reading input\n");
+            continue;
+        }
+        
+        size_t len = strlen(buffer);
+        if (len > 0 && buffer[len-1] == '\n') {
+            buffer[len-1] = '\0';
+            len--;
+        }
+
+        if (len >= 1) {
+            fail = 0;
+            break;
+        }
+    }
+
+    if (fail) {
+        fprintf(stderr, "Failed to get input after %d retries\n", retry);
+    }
+    return fail;
+}
+
+int decrypt_smtp_password(char *output, size_t output_len) {
+    FILE *key_file = NULL;
+    FILE *cred_file = NULL;
+    char key[512] = {0};
+    char encrypted[1024] = {0};
+    char cmd[2048] = {0};
+    int ret = 1;
+
+    const char *key_path = NULL;
+    const char *cred_path = NULL;
+
+    if (get_run_mode() == MODE_SERVICE) {
+        key_path = "/etc/dlogger/dlogger.key";
+        cred_path = "/etc/dlogger/smtp_password.cred";
+    } else {
+        key_path = "./data/dlogger.key";
+        cred_path = "./data/smtp_password.cred";
+    }
+
+    key_file = fopen(key_path, "r");
+    if (key_file == NULL) {
+        fprintf(stderr, "Failed to open key file: %s\n", key_path);
+        return 1;
+    }
+
+    if (fgets(key, sizeof(key), key_file) == NULL) {
+        fprintf(stderr, "Failed to read encryption key\n");
+        fclose(key_file);
+        return 1;
+    }
+    fclose(key_file);
+
+    size_t key_len = strlen(key);
+    if (key_len > 0 && key[key_len-1] == '\n') {
+        key[key_len-1] = '\0';
+    }
+
+    cred_file = fopen(cred_path, "r");
+    if (cred_file == NULL) {
+        fprintf(stderr, "Failed to open credential file: %s\n", cred_path);
+        return 1;
+    }
+
+    if (fgets(encrypted, sizeof(encrypted), cred_file) == NULL) {
+        fprintf(stderr, "Failed to read encrypted password\n");
+        fclose(cred_file);
+        return 1;
+    }
+    fclose(cred_file);
+
+    size_t enc_len = strlen(encrypted);
+    if (enc_len > 0 && encrypted[enc_len-1] == '\n') {
+        encrypted[enc_len-1] = '\0';
+    }
+
+    snprintf(cmd, sizeof(cmd), "echo '%s' | openssl enc -aes-256-cbc -d -base64 -pass 'pass:%s' 2>/dev/null", encrypted, key);
+
+    FILE *pipe = popen(cmd, "r");
+    if (pipe == NULL) {
+        fprintf(stderr, "Failed to execute openssl\n");
+        return 1;
+    }
+
+    if (fgets(output, output_len, pipe) == NULL) {
+        fprintf(stderr, "Failed to decrypt password\n");
+        pclose(pipe);
+        return 1;
+    }
+
+    int status = pclose(pipe);
+    if (status != 0) {
+        fprintf(stderr, "Decryption failed with status: %d\n", status);
+        return 1;
+    }
+
+    size_t dec_len = strlen(output);
+    if (dec_len > 0 && output[dec_len-1] == '\n') {
+        output[dec_len-1] = '\0';
+    }
+
+    return 0;
+}
+
+// Remember to free
+char* transform_prefix_sufix(char* pre, char* ctx, char *suf) {
+    size_t pre_len = strlen(pre);
+    size_t ctx_len = strlen(ctx);
+    size_t suf_len = strlen(suf);
+
+    char *result = malloc(pre_len + ctx_len + suf_len + 1);
+    if (!result) return NULL;
+
+    memcpy(result, pre, pre_len);
+    memcpy(result + pre_len, ctx, ctx_len);
+    memcpy(result + pre_len + ctx_len, suf, suf_len + 1);
+
+    return result;
+}
+
+int get_reports_and_format_content(char *config_path, char *report_dir, char ***contents, size_t *count) {
+    char ** files = NULL;
+    size_t files_count = 0;
+    if (read_report_files(config_path, report_dir, &files, &files_count) != 0) {
+        fprintf(stderr, "Couldn't read report files\n");
+        return 1;
+    }
+
+    if (files_count == 0 || files == NULL) {
+        perror("No reports found\n");
+        return 0;
+    }
+
+    for (int i = 0; i < files_count; i++) {
+        size_t size = strlen(report_dir) + strlen(files[i]) + 2;
+        char *file_path = malloc(size);
+        if (file_path == NULL) {
+            fprintf(stderr, "Failed to allocate file_path\n");
+            continue;
+        }
+        snprintf(file_path, size, "%s/%s", report_dir, files[i]);
+        
+        char *content = NULL;
+        int res = get_content_from_report(file_path, &content);
+        
+        if (res != 0 || content == NULL) {
+            content = malloc(100);
+            if (content != NULL) {
+                snprintf(content, 100, "Couldn't read report, it may be empty.\n");
+            }
+        }
+
+        char *pre = malloc(256);
+        if (pre != NULL) {
+            snprintf(pre, 256, "\nFile %s\n", files[i]);
+        }
+
+        char *content_transform = transform_prefix_sufix(pre, content, "\n");
+
+        if (content_transform == NULL) {
+            fprintf(stderr, "Failed to format prefix & suffix\n");
+        } else {
+            if (content != NULL) free(content);
+            content = content_transform;
+        }
+
+        if (append_string(contents, count, content) != 0) {
+            fprintf(stderr, "Error occurred while appending string to contents\n");
+        }
+
+        if (content != NULL) free(content);
+        if (pre != NULL) free(pre);
+        free(file_path);
+    }
+
+    for (size_t i = 0; i < files_count; i++) {
+        free(files[i]);
+    }
+    free(files);
+
+    return 0;
 }

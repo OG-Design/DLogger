@@ -4,6 +4,7 @@
 - systemd
 - gcc
 - make
+- openssl
 
 ```sh
 # fedora
@@ -13,6 +14,8 @@ sudo dnf install libcurl-devel
 # lib systemd
 sudo dnf install systemd-devel
 
+# openssl for encryption of smtp password
+sudo dnf install openssl
 ```
 
 # Build & Run

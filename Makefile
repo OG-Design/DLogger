@@ -1,6 +1,8 @@
 CFLAGS=-Wall -Wextra -std=c11 -g
 SYSTEMD_CFLAGS=$(shell pkg-config --cflags libsystemd)
 SYSTEMD_LIBS=$(shell pkg-config --libs libsystemd)
+CURL_CFLAGS=$(shell pkg-config --cflags libcurl)
+CURL_LIBS=$(shell pkg-config --libs libcurl)
 
 appname=dlogger
 
@@ -33,8 +35,14 @@ utils_src=$(srcdir)/$(utils_c)
 utils_o=utils.o
 utils_out=$(outdir)/$(utils_o)
 
+smtp_src=$(srcdir)/smtp/smtp.c
+smtp_out=$(outdir)/smtp.o
+
+
 reporter_src=$(srcdir)/reporter/reporter.c
 reporter_out=$(outdir)/$(reporter_o)
+
+
 
 main_out=$(outdir)/$(main_o)
 samba_out=$(outdir)/$(samba_o)
@@ -44,8 +52,8 @@ samba_out=$(outdir)/$(samba_o)
 all: $(appname)
 
 # This is a comment
-$(appname): $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out)
-	gcc $(CFLAGS) $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out) $(SYSTEMD_LIBS) -o ./dist/out/$(appname)
+$(appname): $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out) $(smtp_out)
+	gcc $(CFLAGS) $(main_out) $(samba_out) $(cjson_out) $(systemd_out) $(utils_out) $(reporter_out) $(smtp_out) $(SYSTEMD_LIBS) $(CURL_LIBS) -o ./dist/out/$(appname)
 
 $(main_out): ./src/main.c
 	@mkdir -p $(outdir)
@@ -70,6 +78,11 @@ $(utils_out): $(utils_src)
 $(reporter_out): $(reporter_src) $(srcdir)/reporter/reporter.h $(srcdir)/utils.h
 	@mkdir -p $(outdir)
 	gcc -c $(reporter_src) -o $@
+
+$(smtp_out): $(smtp_src) 
+	@mkdir -p $(outdir)
+	gcc -c $(smtp_src) $(CURL_CFLAGS) -o $@
+
 
 clean: 
 	rm -rf ./dist $(appname)

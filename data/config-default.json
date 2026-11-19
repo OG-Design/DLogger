@@ -1,24 +1,17 @@
 {
-    "services": [
-        "NetworkManager.service"
-    ],
-    "properties": {
-        "send-mail": 0,
-        "send-mail-interval-hr": 24,
-        "watch-interval-sec": 3600,
-        "report-properties": {
-            "day-range": [ 
-                0,
-                1
-            ]
-        }
-    },
-    "service-accounts": [
-        {
-            "to":"<email>\r\n",
-            "from":"<sender-email>\r\n",
-            "subject":"Service report for <machine>@<ip>\r\n",
-            "expires":"<ISO 8601>"
-        }
-    ]
+	"services":	["NetworkManager.service"],
+	"properties":	{
+		"send-mail":	0,
+		"send-mail-interval-hr":	24,
+		"watch-interval-sec":	3600,
+		"report-properties":	{
+			"day-range":	[0, 1]
+		},
+		"smtp-config":	{
+			"user":	"",
+			"url":	"",
+			"mailfrom":	""
+		}
+	},
+	"service-accounts":	[]
 }
