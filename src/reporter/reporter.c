@@ -223,3 +223,16 @@ int get_content_from_report(char *file_path, char **content) {
 
     return 0;
 }
+
+int rem_older_than(size_t days_older_than) {
+    const char *report_dir = get_reports_dir();
+    char *config_path = get_config_path();
+    char **files;
+    size_t f_count = 0;
+    if (read_report_files(config_path, report_dir, &files, &f_count) != 0) {
+        fprintf(stderr, "Couldn't read reports to remove\n");
+        return 1;
+    }
+ 
+    return 0;
+}
