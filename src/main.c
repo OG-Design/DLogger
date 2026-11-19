@@ -132,7 +132,12 @@ int main(int argc, char* argv[]) {
             case 'i':
                 return smtp_wizard(filename);
             case 't':
-                return send_mail_report(filename);        
+                if (send_mail_report(filename) != 0) {
+                    fprintf(stderr, "Test mail report failed\n");
+                    return 1;
+                }
+                printf("Test mail report completed\n");
+                return 0;
             default:
                 continue;
         }

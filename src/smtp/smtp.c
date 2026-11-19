@@ -328,6 +328,9 @@ static size_t read_cb(char *ptr, size_t size, size_t nmemb, void *userp) {
 int send_mail_report(char *file_path) {
     printf("Sending mail report\n");
     int result = 0;
+    char **contents = NULL;
+    size_t contents_count = 0;
+    char **payload_text = NULL;
 
     // Get json config file
     cJSON *json = parse_json(file_path);
@@ -344,7 +347,7 @@ int send_mail_report(char *file_path) {
     if (properties == NULL) {
         perror("Couldn't get json properties");    
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
     // Get smtp configurations object
@@ -353,7 +356,7 @@ int send_mail_report(char *file_path) {
     if (smtp_config == NULL) {
         perror("Couldn't get smtp_config");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
     // Get user string
@@ -361,7 +364,7 @@ int send_mail_report(char *file_path) {
     if (user == NULL || !cJSON_IsString(user)) {
         perror("Property: user not found or not string in smtp_config");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
 
@@ -370,7 +373,7 @@ int send_mail_report(char *file_path) {
     if (url == NULL || !cJSON_IsString(url)) {
         perror("Property: url not found or not string in smtp_config");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
     
     char smtp_url[512];
@@ -381,14 +384,14 @@ int send_mail_report(char *file_path) {
             if (snprintf(smtp_url, sizeof(smtp_url), "smtps://%s", url->valuestring) < 0) {
                 perror("Failed to construct SMTP URL");
                 result = 1;
-                goto free_json;
+                goto cleanup;
             }
         } else {
             // Default to smtp:// (supports STARTTLS on 587)
             if (snprintf(smtp_url, sizeof(smtp_url), "smtp://%s", url->valuestring) < 0) {
                 perror("Failed to construct SMTP URL");
                 result = 1;
-                goto free_json;
+                goto cleanup;
             }
         }
     } else {
@@ -396,7 +399,7 @@ int send_mail_report(char *file_path) {
         if (snprintf(smtp_url, sizeof(smtp_url), "%s", url->valuestring) < 0) {
             perror("Failed to copy SMTP URL");
             result = 1;
-            goto free_json;
+            goto cleanup;
         }
     }
 
@@ -405,7 +408,7 @@ int send_mail_report(char *file_path) {
     if (mailfrom == NULL || !cJSON_IsString(mailfrom)) {
         perror("Property: mailfrom not found or not string in smtp_config\n");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
     
@@ -415,7 +418,7 @@ int send_mail_report(char *file_path) {
     if (service_accounts == NULL || !cJSON_IsArray(service_accounts)) {
         perror("Service accounts not found or invalid format\n");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
     int service_accounts_length = cJSON_GetArraySize(service_accounts);
@@ -423,35 +426,34 @@ int send_mail_report(char *file_path) {
     if (service_accounts_length <= 0) {
         perror("Service accounts not found, add one with: dlogger -m\n");
         result = 1;
-        goto free_json;    
+        goto cleanup;    
     }
 
     const char *reports_path = get_reports_dir();
     if (reports_path == NULL) {
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
     char *report_dir = malloc(strlen(reports_path) + 1);
     if (report_dir == NULL) {
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
     strcpy(report_dir, reports_path);
 
-    char **contents = NULL;
-    size_t contents_count = 0;
-    
     // Get reports
     if (get_reports_and_format_content(file_path, report_dir, &contents, &contents_count) != 0) {
         fprintf(stderr, "Error formatting contents\n");
+        result = 1;
         free(report_dir);
-        return 1;
+        goto cleanup;
     }
     free(report_dir);
 
     if (contents == NULL) {
         fprintf(stderr, "Error: no report contents\n");
-        return 1;
+        result = 1;
+        goto cleanup;
     }
 
     // Build mail configuration
@@ -461,11 +463,10 @@ int send_mail_report(char *file_path) {
     mcfg.ccmail = "";
     
     // Build email payload
-    char **payload_text = NULL;
     if (payload_text_constructor(&payload_text, mcfg, contents, contents_count) != 0) {
         fprintf(stderr, "Failed to construct email payload\n");
         result = 1;
-        goto free_json;
+        goto cleanup;
     }
 
     // Send mail
@@ -484,6 +485,7 @@ int send_mail_report(char *file_path) {
     
         struct curl_slist *recipients = NULL;
         struct upload_status upload_ctx = {0};
+        char curl_error[CURL_ERROR_SIZE] = {0};
         
         // Count payload lines
         size_t payload_lines = 0;
@@ -495,6 +497,7 @@ int send_mail_report(char *file_path) {
         upload_ctx.payload_lines = payload_lines;
 
         curl_easy_setopt(curl, CURLOPT_URL, smtp_url);
+        curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_error);
     
         // Wrap mailfrom in angle brackets as per SMTP RFC
         char formatted_mailfrom[512];
@@ -516,10 +519,8 @@ int send_mail_report(char *file_path) {
         // Authentication
         char password[512] = {0};
         if (decrypt_smtp_password(password, sizeof(password)) == 0) {
-            char userpwd[1024] = {0};
-            if (snprintf(userpwd, sizeof(userpwd), "%s:%s", user->valuestring, password) >= 0) {
-                curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd);
-            }
+            curl_easy_setopt(curl, CURLOPT_USERNAME, user->valuestring);
+            curl_easy_setopt(curl, CURLOPT_PASSWORD, password);
         } else {
             fprintf(stderr, "Warning: Could not decrypt SMTP password\n");
         }
@@ -546,115 +547,36 @@ int send_mail_report(char *file_path) {
             
         }
 
+        if (recipients == NULL) {
+            fprintf(stderr, "No valid email recipients found\n");
+            result = 1;
+            curl_easy_cleanup(curl);
+            goto cleanup;
+        }
+
         curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
 
         curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_cb);
         curl_easy_setopt(curl, CURLOPT_READDATA, (void *)&upload_ctx);
-        
-        // Allow RCPT TO command to fail for some recipients
-        curl_easy_setopt(curl, CURLOPT_MAIL_RCPT_ALLOWFAILS, 1L);
+        curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
         
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s (code: %d)\n", curl_easy_strerror(res), res);
-            
-            // If curl fails with VRFY error, try Python fallback
-            if (res == CURLE_WEIRD_SERVER_REPLY) {
-                fprintf(stderr, "Attempting fallback using Python SMTP wrapper...\n");
-                
-                // Write body to temporary file
-                char temp_body_path[256];
-                snprintf(temp_body_path, sizeof(temp_body_path), "/tmp/dlogger_mail_%d.txt", (int)getpid());
-                
-                FILE *body_file = fopen(temp_body_path, "w");
-                if (body_file) {
-                    for (size_t i = 0; i < payload_lines && payload_text[i] != NULL; i++) {
-                        fprintf(body_file, "%s\n", payload_text[i]);
-                    }
-                    fclose(body_file);
-                    
-                    // Build recipients array safely
-                    char recipients_arg[2048];
-                    int offset = snprintf(recipients_arg, sizeof(recipients_arg), "[\"");
-                    int first = 1;
-                    cJSON *rcpt = NULL;
-                    cJSON_ArrayForEach(rcpt, service_accounts) {
-                        cJSON *to = cJSON_GetObjectItemCaseSensitive(rcpt, "to");
-                        cJSON *expires = cJSON_GetObjectItemCaseSensitive(rcpt, "expires");
-                        
-                        if (to && cJSON_IsString(to) && expires && cJSON_IsString(expires)) {
-                            struct tm expiry = parse_date_str(expires->valuestring);
-                            if (is_not_expired_tm(current_time, expiry) == 0) {
-                                continue;
-                            }
-                            
-                            if (!first) {
-                                offset += snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "\",\"");
-                            }
-                            offset += snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "%s", to->valuestring);
-                            first = 0;
-                            
-                            if (offset >= sizeof(recipients_arg) - 10) {
-                                fprintf(stderr, "Warning: Recipients list too long, truncating\n");
-                                break;
-                            }
-                        }
-                    }
-                    snprintf(recipients_arg + offset, sizeof(recipients_arg) - offset, "\"]");
-                    
-                    // Execute Python fallback - check multiple locations
-                    const char* script_locations[] = {
-                        "/usr/libexec/dlogger/send_mail.py",
-                        "/usr/lib/dlogger/send_mail.py",
-                        "/opt/dlogger/bin/send_mail.py",
-                        NULL
-                    };
-                    
-                    char script_path[256] = {0};
-                    int script_found = 0;
-                    for (int i = 0; script_locations[i] != NULL; i++) {
-                        if (access(script_locations[i], X_OK) == 0) {
-                            strcpy(script_path, script_locations[i]);
-                            script_found = 1;
-                            break;
-                        }
-                    }
-                    
-                    if (!script_found) {
-                        fprintf(stderr, "Error: send_mail.py not found in standard locations\n");
-                        fprintf(stderr, "Checked: /usr/libexec/dlogger/, /usr/lib/dlogger/, /opt/dlogger/bin/\n");
-                        result = 1;
-                    } else {
-                        char cmd[4096];
-                        snprintf(cmd, sizeof(cmd), 
-                            "DLOGGER_SMTP_PASSWORD='%s' python3 '%s' '%s' '%s' '%s'",
-                            password, 
-                            script_path,
-                            file_path,
-                            recipients_arg,
-                            temp_body_path);
-                        
-                        int ret = system(cmd);
-                        if (ret == 0) {
-                            fprintf(stderr, "Python SMTP fallback succeeded\n");
-                            result = 0;
-                        } else {
-                            fprintf(stderr, "Python SMTP fallback failed with exit code %d\n", ret);
-                            result = 1;
-                        }
-                    }
-                    
-                    unlink(temp_body_path);
-                } else {
-                    result = 1;
-                }
+            if (curl_error[0] != '\0') {
+                fprintf(stderr, "curl_easy_perform() failed: %s (code: %d)\n", curl_error, res);
             } else {
-                result = 1;
+                fprintf(stderr, "curl_easy_perform() failed: %s (code: %d)\n", curl_easy_strerror(res), res);
             }
+            result = 1;
+        } else {
+            printf("Mail report sent successfully\n");
         }
         
         curl_easy_cleanup(curl);
         curl_slist_free_all(recipients);
+    } else {
+        fprintf(stderr, "Failed to initialize curl handle\n");
+        result = 1;
     }
 
     if (payload_text != NULL) {
@@ -671,7 +593,8 @@ int send_mail_report(char *file_path) {
         free(contents);
     }
 
-free_json:
+cleanup:
+    curl_global_cleanup();
     cJSON_Delete(json);
 
     return result;
