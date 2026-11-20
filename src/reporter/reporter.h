@@ -20,6 +20,6 @@ int get_configured_range(char *config_path, int *near_days, int *far_days);
 int get_report_files(const char *report_dir, const char *start_date,
                      const char *end_date, char ***files, size_t *count);
 
-                     
+int rem_older_than_conf_range(const char *config_path);
 
 #endif

@@ -425,14 +425,17 @@ void log_peak_memory(void) {
 }
 
 int gen_now_date(struct tm *utc_time) {
+    if (utc_time == NULL) {
+        fprintf(stderr, "UTC output time is required\n");
+        return 1;
+    }
     time_t now = time(NULL);
     if (now == (time_t)-1) {
         fprintf(stderr, "Could not get current time\n");
         return 1;
     }
 
-    utc_time = gmtime(&now);
-    if (utc_time == NULL) {
+    if (gmtime_r(&now, utc_time) == NULL) {
         fprintf(stderr, "Could not convert time to UTC\n");
         return 1;
     }

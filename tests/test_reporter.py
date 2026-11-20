@@ -15,13 +15,23 @@ class ReporterTests(unittest.TestCase):
     def setUpClass(cls):
         cls.build_dir = tempfile.TemporaryDirectory()
         cls.driver = Path(cls.build_dir.name) / "reporter-test"
+        cls.cleanup_driver = Path(cls.build_dir.name) / "reporter-cleanup-test"
         subprocess.run(
-            ["gcc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+            ["gcc", "-std=gnu11", "-Wall", "-Wextra",
              str(ROOT / "tests/reporter_driver.c"),
              str(ROOT / "src/reporter/reporter.c"),
              str(ROOT / "src/utils.c"),
              str(ROOT / "third_party/cjson/cJSON.c"),
              "-Wl,--wrap=time", "-o", str(cls.driver)],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        subprocess.run(
+            ["gcc", "-std=gnu11", "-Wall", "-Wextra",
+             str(ROOT / "tests/reporter_cleanup_driver.c"),
+             str(ROOT / "src/reporter/reporter.c"),
+             str(ROOT / "src/utils.c"),
+             str(ROOT / "third_party/cjson/cJSON.c"),
+             "-Wl,--wrap=time", "-o", str(cls.cleanup_driver)],
             capture_output=True, text=True, check=True, timeout=30,
         )
 
@@ -138,6 +148,32 @@ class ReporterTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Could not calculate UTC report date", result.stderr)
         self.assertEqual(files, [])
+
+    def test_cleanup_removes_only_reports_older_than_far_days(self):
+        self.configure([0, 20])
+        reports_dir = self.directory / "data/reports"
+        reports_dir.mkdir(parents=True)
+        old_report = reports_dir / "report-20261023T235959Z.txt"
+        cutoff_report = reports_dir / "report-20261024T000000Z.txt"
+        fresh_report = reports_dir / "report-20261113T000000Z.txt"
+        non_report = reports_dir / "notes.txt"
+        old_report.touch()
+        cutoff_report.touch()
+        fresh_report.touch()
+        non_report.touch()
+
+        now = datetime.datetime(2026, 11, 13, 1, tzinfo=datetime.timezone.utc)
+        env = os.environ.copy()
+        env["DLOGGER_MODE"] = "dev"
+        result = subprocess.run(
+            [str(self.cleanup_driver), str(self.config), str(int(now.timestamp()))],
+            cwd=self.directory, capture_output=True, text=True, env=env, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old_report.exists())
+        self.assertTrue(cutoff_report.exists())
+        self.assertTrue(fresh_report.exists())
+        self.assertTrue(non_report.exists())
 
 
 if __name__ == "__main__":

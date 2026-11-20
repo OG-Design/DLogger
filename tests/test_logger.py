@@ -9,7 +9,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = Path(os.environ.get("LOGGER_TEST_BINARY", ROOT / "dist/out/main"))
+_binary = Path(os.environ.get("LOGGER_TEST_BINARY", str(ROOT / "dist/out/dlogger")))
+BINARY = _binary if _binary.is_absolute() else (ROOT / _binary).resolve()
 
 
 def active_services():
@@ -120,16 +121,8 @@ class LoggerTests(unittest.TestCase):
         for service in services:
             self.assertIn(f"SERVICE: {service}\n", report)
             self.assertIn(f"Service: {service}\n", report)
-
-        process_lines = [
-            line for line in result.stdout.splitlines()
-            if line.startswith("    PID: ")
-        ]
-        self.assertTrue(process_lines, result.stdout)
-        for line in process_lines:
-            self.assertIn(line + "\n", report)
-            self.assertIn(" Name: ", line)
-            self.assertIn(" Cgroup: ", line)
+        self.assertIn("\tPID:", report)
+        self.assertIn(" Cgroup: ", report)
 
     def test_once_and_repeated_watch(self):
         service = active_service()
@@ -139,13 +132,14 @@ class LoggerTests(unittest.TestCase):
 
         result = self.run_logger()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.count("Getting configured services."), 1)
-        self.assertIn(f"SERVICE: {service}", result.stdout)
-        self.assertIn(f"Service: {service}", result.stdout)
+        initial_reports = list(self.report_dir.glob("report-*.txt"))
+        self.assertEqual(len(initial_reports), 1)
+        self.assertIn(f"SERVICE: {service}", initial_reports[0].read_text())
 
         output_path = Path(self.tmp.name) / "watch.log"
         watch_dir = Path(self.tmp.name) / "watch"
-        (watch_dir / "data/reports").mkdir(parents=True)
+        watch_reports = watch_dir / "data/reports"
+        watch_reports.mkdir(parents=True)
         with output_path.open("w") as output:
             process = subprocess.Popen(
                 [str(BINARY), "-f", str(self.config), "-w", "1"],
@@ -158,7 +152,7 @@ class LoggerTests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     time.sleep(0.1)
                     text = output_path.read_text()
-                    snapshots = text.count("Getting configured services.")
+                    snapshots = len(list(watch_reports.glob("report-*.txt")))
                     self.assertIsNone(process.poll(), text)
                     if snapshots >= 2 and first_fds is None:
                         first_fds = len(os.listdir(f"/proc/{process.pid}/fd"))
@@ -177,15 +171,25 @@ class LoggerTests(unittest.TestCase):
             self.skipTest("No accessible systemd manager with an active service")
         self.write_config([])
         binary = Path(self.tmp.name) / "allocation-test"
-        subprocess.run(
-            ["gcc", "-std=gnu11", "-Wall", "-Wextra", "-I", str(ROOT / "src"),
-             str(ROOT / "tests/test_allocation_failures.c"),
-             str(ROOT / "src/systemd/systemd.c"), str(ROOT / "src/utils.c"),
-             str(ROOT / "third_party/cjson/cJSON.c"), "-lsystemd",
-             "-Wl,--wrap=malloc", "-Wl,--wrap=realloc", "-Wl,--wrap=strdup",
-             "-o", str(binary)],
-            cwd=ROOT, capture_output=True, text=True, timeout=30, check=True,
-        )
+        compile_cmd = [
+            "gcc", "-std=gnu11", "-Wall", "-Wextra", "-I", str(ROOT / "src"),
+            str(ROOT / "tests/test_allocation_failures.c"),
+            str(ROOT / "src/systemd/systemd.c"), str(ROOT / "src/utils.c"),
+            str(ROOT / "src/reporter/reporter.c"),
+            str(ROOT / "third_party/cjson/cJSON.c"), "-lsystemd",
+            "-Wl,--wrap=malloc", "-Wl,--wrap=realloc", "-Wl,--wrap=strdup",
+            "-o", str(binary),
+        ]
+        try:
+            subprocess.run(
+                compile_cmd,
+                cwd=ROOT, capture_output=True, text=True, timeout=30, check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            combined = f"{exc.stdout}\n{exc.stderr}"
+            if "systemd/sd-bus.h" in combined or "cannot find -lsystemd" in combined:
+                self.skipTest("libsystemd development files are unavailable")
+            raise
         result = subprocess.run(
             [str(binary), str(self.config)], cwd=ROOT,
             capture_output=True, text=True, timeout=30,

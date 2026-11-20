@@ -1,5 +1,7 @@
-#include <sys/ucontext.h>
 #define _POSIX_C_SOURCE 200809L
+
+#include "reporter/reporter.h"
+#include <sys/ucontext.h>
 
 #include <bits/time.h>
 #include <time.h>
@@ -25,22 +27,31 @@ static int before(const struct timespec *a, const struct timespec *b) {
     return a->tv_sec < b->tv_sec || (a->tv_sec == b->tv_sec && a->tv_nsec < b->tv_nsec);
 }
 
-void service_watcher(char* filename) {    
-    if (get_conf_services_data(filename) != 0)
-        perror("Error getting services data\n");
+int service_watcher(char* filename) {
+    if (get_conf_services_data(filename) != 0) {
+        fprintf(stderr, "Error getting services data\n");
+        return 1;
+    }
+
+    if (rem_older_than_conf_range(filename) != 0) {
+        fprintf(stderr, "Warning: failed deleting old reports\n");
+    }
+    
 
     fflush(stdout);
     
     log_peak_memory();
+
+    return 0;
 }
 
-void smtp_watcher(char* filename) {
+int smtp_watcher(char* filename) {
     printf("sending nothing...\n");
-    const char *report_dir = get_reports_dir();
-    // send_report_smtp(filename, report_dir);
     if (send_mail_report(filename) != 0) {
         fprintf(stderr, "Couldn't send report\n");
+        return 1;
     }
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -53,11 +64,6 @@ int main(int argc, char* argv[]) {
 
     int opt;
 
-    printf("args: \n");
-    for (int i = 0; i < argc; i++) {
-        printf("- %s\n", argv[i]);
-    }
-
     char* filename = get_config_path();
 
     unsigned int watch = 0;
@@ -67,7 +73,6 @@ int main(int argc, char* argv[]) {
         switch (opt) {
             case 'f':
                 filename = optarg;
-                printf("Found arg f: %s\n", filename);
                 break;
             case 'w': {
                 char *end;
@@ -191,18 +196,21 @@ int main(int argc, char* argv[]) {
     }
 
     if (watch==0) {
-        service_watcher(filename);
-        return 0;
+        return service_watcher(filename);
     }
 
     for (;;) {
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (!before(&now, &next_1)) {
-            service_watcher(filename);
+            if (service_watcher(filename) != 0) {
+                fprintf(stderr, "Error in service watcher\n");
+            }
             add_ms(&next_1, (long) watch * 1000);
         }
         if (email_watch > 0 && !before(&now, &next_2)) {
-            smtp_watcher(filename);
+            if(smtp_watcher(filename) != 0) {
+                fprintf(stderr, "Error in smtp watcher\n");
+            }
             add_ms(&next_2, (long) email_watch * 1000);
         }
 

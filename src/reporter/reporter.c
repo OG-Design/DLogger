@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>  // unlink
 
 #include "reporter.h"
 #include "../utils.h"
@@ -224,15 +225,53 @@ int get_content_from_report(char *file_path, char **content) {
     return 0;
 }
 
-int rem_older_than(size_t days_older_than) {
+int rem_older_than_conf_range(const char *config_path) {
     const char *report_dir = get_reports_dir();
-    char *config_path = get_config_path();
-    char **files;
-    size_t f_count = 0;
-    if (read_report_files(config_path, report_dir, &files, &f_count) != 0) {
-        fprintf(stderr, "Couldn't read reports to remove\n");
+    if (config_path == NULL || report_dir == NULL) {
+        fprintf(stderr, "Configuration path and report directory are required\n");
         return 1;
     }
- 
+
+    int near_days, far_days;
+    if (get_configured_range((char *)config_path, &near_days, &far_days) != 0)
+        return 1;
+
+    time_t now = time(NULL);
+    if (now == (time_t)-1) return 1;
+
+    char cutoff[9];
+    if (format_days_ago(now, far_days, cutoff) != 0)
+        return 1;
+
+    DIR *dir = opendir(report_dir);
+    if (!dir) return 1;
+
+    struct dirent *entry;
+    errno = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+
+        if (!is_report_in_range(name, "00000000", "99999999"))
+            continue;
+
+        if (strncmp(name + 7, cutoff, 8) < 0) {
+            char fullpath[PATH_MAX];
+            int n = snprintf(fullpath, sizeof(fullpath), "%s/%s", report_dir, name);
+            if (n < 0 || (size_t)n >= sizeof(fullpath) || unlink(fullpath) != 0) {
+                perror("Failed to delete old report");
+                closedir(dir);
+                return 1;
+            }
+        }
+        errno = 0;
+    }
+
+    if (errno != 0) {
+        perror("Could not read report directory");
+        closedir(dir);
+        return 1;
+    }
+
+    if (closedir(dir) != 0) return 1;
     return 0;
 }
